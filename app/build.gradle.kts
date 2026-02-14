@@ -51,9 +51,8 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
 
-            
-
-            signingConfig = signingConfigs.findByName("release")
+            // 不使用签名配置，使用默认 debug 签名
+            // signingConfig = signingConfigs.findByName("release")
         }
         debug {
             applicationIdSuffix = ".debug"
@@ -92,9 +91,11 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    implementation 'androidx.core:core:1.15.0'
-    implementation 'androidx.core:core-ktx:1.15.0'
-    implementation 'androidx.appcompat:appcompat:1.7.0'
+    
+    // 修复：将单引号改为双引号，并添加括号
+    implementation("androidx.core:core:1.15.0")
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("no.nordicsemi.android.kotlin.ble:client:1.1.0")
