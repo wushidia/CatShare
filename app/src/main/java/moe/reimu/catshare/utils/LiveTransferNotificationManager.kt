@@ -12,7 +12,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import moe.reimu.catshare.BuildConfig
 import moe.reimu.catshare.R
-import java.util.concurrent.TimeUnit
 
 /**
  * Android 16 实时通知管理器
