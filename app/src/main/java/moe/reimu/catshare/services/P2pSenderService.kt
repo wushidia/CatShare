@@ -62,6 +62,7 @@ import moe.reimu.catshare.models.WebSocketMessage
 import moe.reimu.catshare.utils.BleUtils
 import moe.reimu.catshare.utils.DeviceUtils
 import moe.reimu.catshare.utils.JsonWithUnknownKeys
+import moe.reimu.catshare.utils.LiveTransferNotificationManager
 import moe.reimu.catshare.utils.NotificationUtils
 import moe.reimu.catshare.utils.ShizukuUtils
 import moe.reimu.catshare.utils.TAG
@@ -98,6 +99,7 @@ class P2pSenderService : BaseP2pService() {
     private var curreentTaskId: Int? = null
 
     private lateinit var notificationManager: NotificationManagerCompat
+    private lateinit var liveNotificationManager: LiveTransferNotificationManager
 
     private val internalReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -113,6 +115,7 @@ class P2pSenderService : BaseP2pService() {
         super.onCreate()
 
         notificationManager = NotificationManagerCompat.from(this)
+        liveNotificationManager = LiveTransferNotificationManager(this)
 
         registerInternalBroadcastReceiver(internalReceiver, IntentFilter().apply {
             addAction(ACTION_CANCEL_SENDING)
@@ -307,7 +310,7 @@ class P2pSenderService : BaseP2pService() {
                     }
 
                     var processedSize = 0L
-                    var lastProgressUpdate = 0L
+                    liveNotificationManager.resetSpeedCalculation()
 
                     call.respondOutputStream(ContentType.Application.Zip, HttpStatusCode.OK) {
                         val cr = contentResolver
@@ -332,27 +335,36 @@ class P2pSenderService : BaseP2pService() {
                                         zo.write(buffer, 0, readLen)
                                         processedSize += readLen.toLong()
 
-                                        // Update progress if needed
-                                        val now = System.nanoTime()
-                                        val elapsed = TimeUnit.SECONDS.convert(
-                                            now - lastProgressUpdate, TimeUnit.NANOSECONDS
+                                        // 使用实时通知管理器更新（带节流）
+                                        val notification = createProgressNotification(
+                                            task.id,
+                                            task.device.name,
+                                            rf.name,
+                                            totalSize,
+                                            processedSize
                                         )
-                                        if (elapsed > 1) {
-                                            updateNotification(
-                                                createProgressNotification(
-                                                    task.id,
-                                                    task.device.name,
-                                                    totalSize,
-                                                    processedSize
-                                                )
-                                            )
-                                            lastProgressUpdate = now
-                                        }
+                                        liveNotificationManager.updateNotificationThrottled(
+                                            NotificationUtils.SENDER_FG_ID,
+                                            notification
+                                        )
                                     }
 
                                     zo.closeEntry()
                                 }
                             }
+                            
+                            // 传输完成，强制更新最终状态
+                            val finalNotification = createProgressNotification(
+                                task.id,
+                                task.device.name,
+                                task.files.last().name,
+                                totalSize,
+                                processedSize
+                            )
+                            liveNotificationManager.updateNotificationImmediate(
+                                NotificationUtils.SENDER_FG_ID,
+                                finalNotification
+                            )
                         }
                         transferCompleteFuture.complete(Unit)
                     }
@@ -596,24 +608,13 @@ class P2pSenderService : BaseP2pService() {
     private fun createProgressNotification(
         taskId: Int,
         targetName: String,
+        fileName: String,
         totalSize: Long,
         processedSize: Long
     ): Notification {
-        val n = createNotificationBuilder(R.drawable.ic_upload_file)
-            .setContentTitle(getString(R.string.sending))
-            .setSubText(targetName)
-            .addAction(createCancelSendingAction(taskId))
-            .setOnlyAlertOnce(true)
-            .setOngoing(true)
-
-        val progress = 100.0 * (processedSize.toDouble() / totalSize.toDouble())
-        n.setProgress(100, progress.toInt(), false)
-
-        val f1 = Formatter.formatShortFileSize(this, processedSize)
-        val f2 = Formatter.formatShortFileSize(this, totalSize)
-        n.setContentText("$f1 / $f2 | ${progress.toInt()}%")
-
-        return n.build()
+        return liveNotificationManager.createSendingLiveNotification(
+            taskId, targetName, fileName, totalSize, processedSize
+        )
     }
 
     private fun createFailedNotification(targetName: String, exception: Throwable?): Notification {
