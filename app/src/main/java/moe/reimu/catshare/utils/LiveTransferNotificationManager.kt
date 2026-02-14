@@ -25,7 +25,7 @@ class LiveTransferNotificationManager(private val context: Context) {
     private var transferSpeed = 0L // bytes per second
     
     companion object {
-        private const val UPDATE_INTERVAL_MS = 500L // 每500ms更新一次
+        private const val UPDATE_INTERVAL_MS = 300L // 每300ms更新一次，更频繁
         private const val SPEED_CALCULATION_WINDOW = 1000L // 1秒计算速度
     }
     
@@ -39,13 +39,7 @@ class LiveTransferNotificationManager(private val context: Context) {
         totalSize: Long,
         processedSize: Long
     ): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= 35) {
-            NotificationUtils.createLiveNotificationBuilder(context)
-        } else {
-            NotificationCompat.Builder(context, NotificationUtils.SENDER_CHAN_ID)
-                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-        }
+        val builder = createLiveNotificationBuilder()
         
         val cancelIntent = PendingIntent.getBroadcast(
             context,
@@ -70,13 +64,13 @@ class LiveTransferNotificationManager(private val context: Context) {
         
         val f1 = Formatter.formatShortFileSize(context, processedSize)
         val f2 = Formatter.formatShortFileSize(context, totalSize)
-        val progressText = "$f1 / $f2 | $progress%"
+        val progressText = "$f1 / $f2"
         
         // 估算剩余时间
         val remainingText = if (transferSpeed > 0 && processedSize < totalSize) {
             val remainingBytes = totalSize - processedSize
             val remainingSeconds = remainingBytes / transferSpeed
-            " · 剩余 ${formatTime(remainingSeconds)}"
+            " · ${formatTime(remainingSeconds)}"
         } else ""
         
         builder.apply {
@@ -89,10 +83,21 @@ class LiveTransferNotificationManager(private val context: Context) {
             setOnlyAlertOnce(true)
             addAction(R.drawable.ic_close, context.getString(android.R.string.cancel), cancelIntent)
             
-            // Android 16+ 增强样式
+            // Android 16+ 实时通知关键配置
             if (Build.VERSION.SDK_INT >= 35) {
+                // 设置为进度类别
+                setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                
+                // 启用实时更新
+                setShowWhen(false)
+                setUsesChronometer(false)
+                
+                // 使用 BigTextStyle 显示更多信息
                 setStyle(NotificationCompat.BigTextStyle()
-                    .bigText("文件: $fileName\n$progressText\n速度: $speedText$remainingText"))
+                    .bigText("文件: $fileName\n进度: $progressText ($progress%)\n速度: $speedText$remainingText"))
+                
+                // 设置优先级为高
+                priority = NotificationCompat.PRIORITY_HIGH
             }
         }
         
@@ -109,13 +114,7 @@ class LiveTransferNotificationManager(private val context: Context) {
         totalSize: Long,
         processedSize: Long?
     ): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= 35) {
-            NotificationUtils.createLiveNotificationBuilder(context)
-        } else {
-            NotificationCompat.Builder(context, NotificationUtils.RECEIVER_CHAN_ID)
-                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-        }
+        val builder = createLiveNotificationBuilder()
         
         val cancelIntent = PendingIntent.getBroadcast(
             context,
@@ -132,6 +131,14 @@ class LiveTransferNotificationManager(private val context: Context) {
             setOngoing(true)
             setOnlyAlertOnce(true)
             addAction(R.drawable.ic_close, context.getString(android.R.string.cancel), cancelIntent)
+            
+            // Android 16+ 实时通知关键配置
+            if (Build.VERSION.SDK_INT >= 35) {
+                setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                setShowWhen(false)
+                setUsesChronometer(false)
+                priority = NotificationCompat.PRIORITY_HIGH
+            }
         }
         
         if (processedSize != null && totalSize > 0) {
@@ -146,12 +153,12 @@ class LiveTransferNotificationManager(private val context: Context) {
             
             val f1 = Formatter.formatShortFileSize(context, processedSize)
             val f2 = Formatter.formatShortFileSize(context, totalSize)
-            val progressText = "$f1 / $f2 | $progress%"
+            val progressText = "$f1 / $f2"
             
             val remainingText = if (transferSpeed > 0 && processedSize < totalSize) {
                 val remainingBytes = totalSize - processedSize
                 val remainingSeconds = remainingBytes / transferSpeed
-                " · 剩余 ${formatTime(remainingSeconds)}"
+                " · ${formatTime(remainingSeconds)}"
             } else ""
             
             builder.apply {
@@ -160,7 +167,7 @@ class LiveTransferNotificationManager(private val context: Context) {
                 
                 if (Build.VERSION.SDK_INT >= 35) {
                     setStyle(NotificationCompat.BigTextStyle()
-                        .bigText("文件: $fileName\n$progressText\n速度: $speedText$remainingText"))
+                        .bigText("文件: $fileName\n进度: $progressText ($progress%)\n速度: $speedText$remainingText"))
                 }
             }
         } else {
@@ -174,15 +181,46 @@ class LiveTransferNotificationManager(private val context: Context) {
     }
     
     /**
+     * 创建实时通知构建器
+     */
+    private fun createLiveNotificationBuilder(): NotificationCompat.Builder {
+        val channelId = if (Build.VERSION.SDK_INT >= 35) {
+            NotificationUtils.LIVE_TRANSFER_CHAN_ID
+        } else {
+            NotificationUtils.SENDER_CHAN_ID
+        }
+        
+        return NotificationCompat.Builder(context, channelId).apply {
+            setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            setOnlyAlertOnce(true)
+            
+            if (Build.VERSION.SDK_INT >= 35) {
+                // Android 16+ 特定配置
+                priority = NotificationCompat.PRIORITY_HIGH
+                setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                setShowWhen(false)
+                setOngoing(true)
+            } else {
+                priority = NotificationCompat.PRIORITY_DEFAULT
+            }
+        }
+    }
+    
+    /**
      * 更新通知（带节流控制）
      */
     @SuppressLint("MissingPermission")
     fun updateNotificationThrottled(notificationId: Int, notification: Notification): Boolean {
         val now = System.currentTimeMillis()
         if (now - lastUpdateTime >= UPDATE_INTERVAL_MS) {
-            notificationManager.notify(notificationId, notification)
-            lastUpdateTime = now
-            return true
+            try {
+                notificationManager.notify(notificationId, notification)
+                lastUpdateTime = now
+                return true
+            } catch (e: SecurityException) {
+                // 权限被拒绝
+                e.printStackTrace()
+            }
         }
         return false
     }
@@ -192,8 +230,13 @@ class LiveTransferNotificationManager(private val context: Context) {
      */
     @SuppressLint("MissingPermission")
     fun updateNotificationImmediate(notificationId: Int, notification: Notification) {
-        notificationManager.notify(notificationId, notification)
-        lastUpdateTime = System.currentTimeMillis()
+        try {
+            notificationManager.notify(notificationId, notification)
+            lastUpdateTime = System.currentTimeMillis()
+        } catch (e: SecurityException) {
+            // 权限被拒绝
+            e.printStackTrace()
+        }
     }
     
     /**
@@ -225,9 +268,9 @@ class LiveTransferNotificationManager(private val context: Context) {
      */
     private fun formatTime(seconds: Long): String {
         return when {
-            seconds < 60 -> "${seconds}秒"
-            seconds < 3600 -> "${seconds / 60}分${seconds % 60}秒"
-            else -> "${seconds / 3600}时${(seconds % 3600) / 60}分"
+            seconds < 60 -> "剩余${seconds}秒"
+            seconds < 3600 -> "剩余${seconds / 60}分钟"
+            else -> "剩余${seconds / 3600}小时"
         }
     }
 }
