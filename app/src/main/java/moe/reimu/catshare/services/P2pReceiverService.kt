@@ -480,15 +480,19 @@ class P2pReceiverService : BaseP2pService() {
                     val downloadUrl = "https://${hostPort}/download?taskId=${taskId}"
 
                     val files = client.prepareGet(downloadUrl).execute { downloadRes ->
-                        val ist = downloadRes.bodyAsChannel().toInputStream()
+    val ist = downloadRes.bodyAsChannel().toInputStream()
 
-                        val progress = ProgressCounter(totalSize) { total, processed ->
-                            // 这个回调可以保留或移除，因为我们在 saveArchive 中处理
-                        }
+    val progress = ProgressCounter(totalSize) { total, processed ->
+        updateNotification(
+            createProgressNotification(
+                localTaskId, senderName, totalSize, processed
+            )
+        )
+    }
 
-                        ZipInputStream(ist).use { zipStream ->
-                            saveArchive(zipStream, progress, localTaskId, senderName, fileName, totalSize)
-                        }
+    ZipInputStream(ist).use { zipStream ->
+        saveArchive(zipStream, progress)
+    }
                     }
 
                     if (files.isNotEmpty()) {
