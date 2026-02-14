@@ -278,14 +278,6 @@ class P2pReceiverService : BaseP2pService() {
         return n.build()
     }
 
-    private fun createProgressNotification(
-        taskId: Int, senderName: String, fileName: String, totalSize: Long, processedSize: Long?
-    ): Notification {
-        return liveNotificationManager.createReceivingLiveNotification(
-            taskId, senderName, fileName, totalSize, processedSize
-        )
-    }
-
     private fun createCompletedNotification(
         senderName: String, receivedFiles: List<ReceivedFile>, isPartial: Boolean
     ): Notification {
@@ -472,7 +464,7 @@ class P2pReceiverService : BaseP2pService() {
                     }
 
                     updateNotification(
-                        createProgressNotification(
+                        liveNotificationManager.createReceivingLiveNotification(
                             localTaskId, senderName, fileName, totalSize, null
                         )
                     )
@@ -480,19 +472,11 @@ class P2pReceiverService : BaseP2pService() {
                     val downloadUrl = "https://${hostPort}/download?taskId=${taskId}"
 
                     val files = client.prepareGet(downloadUrl).execute { downloadRes ->
-    val ist = downloadRes.bodyAsChannel().toInputStream()
+                        val ist = downloadRes.bodyAsChannel().toInputStream()
 
-    val progress = ProgressCounter(totalSize) { total, processed ->
-        updateNotification(
-            createProgressNotification(
-                localTaskId, senderName, totalSize, processed
-            )
-        )
-    }
-
-    ZipInputStream(ist).use { zipStream ->
-        saveArchive(zipStream, progress)
-    }
+                        ZipInputStream(ist).use { zipStream ->
+                            saveArchive(zipStream, localTaskId, senderName, fileName, totalSize)
+                        }
                     }
 
                     if (files.isNotEmpty()) {
@@ -562,7 +546,7 @@ class P2pReceiverService : BaseP2pService() {
                             false
                         }
                         statusFuture.onAwait { status ->
-                            if (status.first == 3 && status.second == "user refuse") {
+                          if (status.first == 3 && status.second == "user refuse") {
                                 throw CancelledByUserException(true)
                             }
                             throw RuntimeException("Transfer terminated with $status")
@@ -582,7 +566,6 @@ class P2pReceiverService : BaseP2pService() {
 
     private fun saveArchive(
         zipStream: ZipInputStream,
-        progress: ProgressCounter,
         taskId: Int,
         senderName: String,
         fileName: String,
@@ -593,7 +576,6 @@ class P2pReceiverService : BaseP2pService() {
         liveNotificationManager.resetSpeedCalculation()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Disable validation as we only use the file name anyway
             dalvik.system.ZipPathValidator.setCallback(ZipPathValidatorCallback)
         }
 
@@ -628,10 +610,9 @@ class P2pReceiverService : BaseP2pService() {
                             os.write(buffer, 0, readLen)
 
                             processedSize += readLen.toLong()
-                            progress.update(processedSize)
                             
                             // 使用实时通知更新
-                            val notification = createProgressNotification(
+                            val notification = liveNotificationManager.createReceivingLiveNotification(
                                 taskId, senderName, entryFile.name, totalSize, processedSize
                             )
                             liveNotificationManager.updateNotificationThrottled(
@@ -649,7 +630,6 @@ class P2pReceiverService : BaseP2pService() {
                         )
                     )
                 } catch (e: Throwable) {
-                    // Remove failed files
                     contentResolver.delete(uri, null, null)
                     throw e
                 }
