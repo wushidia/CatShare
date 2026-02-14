@@ -297,69 +297,78 @@ class P2pSenderService : BaseP2pService() {
                 }
 
                 get("/download") {
-    Log.i(TAG, "Got download request from ${call.request.local.remoteAddress}")
-    transferStartFuture.complete(Unit)
+                    Log.i(TAG, "Got download request from ${call.request.local.remoteAddress}")
+                    transferStartFuture.complete(Unit)
 
-    if (call.request.queryParameters["taskId"] != taskIdStr) {
-        call.respondText(
-            "Task ID not found",
-            ContentType.Text.Plain,
-            HttpStatusCode.NotFound
-        )
-        return@get
-    }
-
-    var processedSize = 0L
-    var lastProgressUpdate = 0L
-
-    call.respondOutputStream(ContentType.Application.Zip, HttpStatusCode.OK) {
-        val cr = contentResolver
-        ZipOutputStream(this).use { zo ->
-            if (sharedTextContent != null) {
-                zo.putNextEntry(ZipEntry("0/sharedText.txt"))
-                zo.write(sharedTextContent.toByteArray(Charsets.UTF_8))
-                zo.closeEntry()
-                return@use
-            }
-
-            for ((i, rf) in task.files.withIndex()) {
-                cr.openInputStream(rf.uri)!!.use { ist ->
-                    zo.putNextEntry(ZipEntry("$i/${rf.name}"))
-
-                    val buffer = ByteArray(1024 * 1024 * 4)
-                    while (true) {
-                        val readLen = ist.read(buffer)
-                        if (readLen == -1) {
-                            break
-                        }
-                        zo.write(buffer, 0, readLen)
-                        processedSize += readLen.toLong()
-
-                        // Update progress if needed
-                        val now = System.nanoTime()
-                        val elapsed = TimeUnit.SECONDS.convert(
-                            now - lastProgressUpdate, TimeUnit.NANOSECONDS
+                    if (call.request.queryParameters["taskId"] != taskIdStr) {
+                        call.respondText(
+                            "Task ID not found",
+                            ContentType.Text.Plain,
+                            HttpStatusCode.NotFound
                         )
-                        if (elapsed > 1) {
-                            updateNotification(
-                                createProgressNotification(
-                                    task.id,
-                                    task.device.name,
-                                    totalSize,
-                                    processedSize
-                                )
-                            )
-                            lastProgressUpdate = now
-                        }
+                        return@get
                     }
 
-                    zo.closeEntry()
+                    var processedSize = 0L
+                    liveNotificationManager.resetSpeedCalculation()
+
+                    call.respondOutputStream(ContentType.Application.Zip, HttpStatusCode.OK) {
+                        val cr = contentResolver
+                        ZipOutputStream(this).use { zo ->
+                            if (sharedTextContent != null) {
+                                zo.putNextEntry(ZipEntry("0/sharedText.txt"))
+                                zo.write(sharedTextContent.toByteArray(Charsets.UTF_8))
+                                zo.closeEntry()
+                                return@use
+                            }
+
+                            for ((i, rf) in task.files.withIndex()) {
+                                cr.openInputStream(rf.uri)!!.use { ist ->
+                                    zo.putNextEntry(ZipEntry("$i/${rf.name}"))
+
+                                    val buffer = ByteArray(1024 * 1024 * 4)
+                                    while (true) {
+                                        val readLen = ist.read(buffer)
+                                        if (readLen == -1) {
+                                            break
+                                        }
+                                        zo.write(buffer, 0, readLen)
+                                        processedSize += readLen.toLong()
+
+                                        // 使用实时通知管理器更新（带节流）
+                                        val notification = liveNotificationManager.createSendingLiveNotification(
+                                            task.id,
+                                            task.device.name,
+                                            rf.name,
+                                            totalSize,
+                                            processedSize
+                                        )
+                                        liveNotificationManager.updateNotificationThrottled(
+                                            NotificationUtils.SENDER_FG_ID,
+                                            notification
+                                        )
+                                    }
+
+                                    zo.closeEntry()
+                                }
+                            }
+                            
+                            // 传输完成，强制更新最终状态
+                            val finalNotification = liveNotificationManager.createSendingLiveNotification(
+                                task.id,
+                                task.device.name,
+                                task.files.last().name,
+                                totalSize,
+                                processedSize
+                            )
+                            liveNotificationManager.updateNotificationImmediate(
+                                NotificationUtils.SENDER_FG_ID,
+                                finalNotification
+                            )
+                        }
+                        transferCompleteFuture.complete(Unit)
+                    }
                 }
-            }
-        }
-        transferCompleteFuture.complete(Unit)
-    }
-}
             }
         }
 
@@ -419,7 +428,7 @@ class P2pSenderService : BaseP2pService() {
                             p2pService.findCharacteristic(BleUtils.CHAR_STATUS_UUID)
                                 ?: throw IllegalStateException("BLE device info char not found")
                         val p2pInfoChar = p2pService.findCharacteristic(BleUtils.CHAR_P2P_UUID)
-                            ?: throw IllegalStateException("BLE P2P info char not found")
+                                ?: throw IllegalStateException("BLE P2P info char not found")
                         val rdInfo: DeviceInfo =
                             JsonWithUnknownKeys.decodeFromString(deviceInfoChar.read().value.decodeToString())
                         Log.i(TAG, "Remote device: $rdInfo")
@@ -595,18 +604,6 @@ class P2pSenderService : BaseP2pService() {
             .setContentText(getString(R.string.noti_connecting))
             .addAction(createCancelSendingAction(taskId))
             .setOngoing(true).build()
-
-    private fun createProgressNotification(
-        taskId: Int,
-        targetName: String,
-        fileName: String,
-        totalSize: Long,
-        processedSize: Long
-    ): Notification {
-        return liveNotificationManager.createSendingLiveNotification(
-            taskId, targetName, fileName, totalSize, processedSize
-        )
-    }
 
     private fun createFailedNotification(targetName: String, exception: Throwable?): Notification {
         if (AppSettings(this).verbose && exception != null) {
