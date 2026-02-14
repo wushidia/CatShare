@@ -11,14 +11,14 @@ plugins {
 
 android {
     namespace = "moe.reimu.catshare"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "moe.reimu.catshare"
         minSdk = 29
-        targetSdk = 35
-        versionCode = 8
-        versionName = "1.7"
+        targetSdk = 36
+        versionCode = 9
+        versionName = "1.8"
     }
 
     signingConfigs {
