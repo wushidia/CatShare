@@ -1,6 +1,5 @@
 package moe.reimu.catshare.utils
 
-import android.app.Notification
 import android.content.Context
 import android.os.Build
 import android.widget.Toast
