@@ -30,6 +30,7 @@ import android.widget.Toast
 import androidx.annotation.DrawableRes
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.net.toUri
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.websocket.WebSockets
@@ -63,9 +64,11 @@ import moe.reimu.catshare.exceptions.ExceptionWithMessage
 import moe.reimu.catshare.models.P2pInfo
 import moe.reimu.catshare.models.ReceivedFile
 import moe.reimu.catshare.models.WebSocketMessage
+import moe.reimu.catshare.utils.LiveTransferNotificationManager
 import moe.reimu.catshare.utils.NotificationUtils
 import moe.reimu.catshare.utils.ProgressCounter
 import moe.reimu.catshare.utils.TAG
+import moe.reimu.catshare.utils.ZipPathValidatorCallback
 import moe.reimu.catshare.utils.awaitWithTimeout
 import moe.reimu.catshare.utils.checkP2pPermissions
 import moe.reimu.catshare.utils.connectSuspend
@@ -83,11 +86,11 @@ import java.util.zip.ZipInputStream
 import javax.net.ssl.SSLContext
 import kotlin.math.min
 import kotlin.random.Random
-import androidx.core.net.toUri
-import moe.reimu.catshare.utils.ZipPathValidatorCallback
 
 class P2pReceiverService : BaseP2pService() {
+    
     private lateinit var notificationManager: NotificationManagerCompat
+    private lateinit var liveNotificationManager: LiveTransferNotificationManager
 
     private val internalReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -111,6 +114,7 @@ class P2pReceiverService : BaseP2pService() {
         }
 
         notificationManager = NotificationManagerCompat.from(this)
+        liveNotificationManager = LiveTransferNotificationManager(this)
 
         registerInternalBroadcastReceiver(internalReceiver, IntentFilter().apply {
             addAction(ACTION_CANCEL_RECEIVING)
@@ -275,35 +279,11 @@ class P2pReceiverService : BaseP2pService() {
     }
 
     private fun createProgressNotification(
-        taskId: Int, senderName: String, totalSize: Long, processedSize: Long?
+        taskId: Int, senderName: String, fileName: String, totalSize: Long, processedSize: Long?
     ): Notification {
-        val cancelIntent = PendingIntent.getBroadcast(
-            this,
-            taskId,
-            Intent(ACTION_CANCEL_RECEIVING).apply { putExtra("taskId", taskId) },
-            PendingIntent.FLAG_IMMUTABLE
+        return liveNotificationManager.createReceivingLiveNotification(
+            taskId, senderName, fileName, totalSize, processedSize
         )
-
-        val n =
-            createNotificationBuilder(R.drawable.ic_downloading).setContentTitle(getString(R.string.receiving))
-                .setSubText(senderName)
-                .addAction(R.drawable.ic_close, getString(android.R.string.cancel), cancelIntent)
-                .setOngoing(true).setOnlyAlertOnce(true)
-        var text = getString(R.string.preparing)
-
-        if (processedSize != null) {
-            val progress = 100.0 * (processedSize.toDouble() / totalSize.toDouble())
-            n.setProgress(100, progress.toInt(), false)
-
-            val f1 = Formatter.formatShortFileSize(this, processedSize)
-            val f2 = Formatter.formatShortFileSize(this, totalSize)
-            text = "$f1 / $f2 | ${progress.toInt()}%"
-        } else {
-            n.setProgress(0, 0, true)
-        }
-        n.setContentText(text)
-
-        return n.build()
     }
 
     private fun createCompletedNotification(
@@ -493,7 +473,7 @@ class P2pReceiverService : BaseP2pService() {
 
                     updateNotification(
                         createProgressNotification(
-                            localTaskId, senderName, totalSize, null
+                            localTaskId, senderName, fileName, totalSize, null
                         )
                     )
 
@@ -503,18 +483,11 @@ class P2pReceiverService : BaseP2pService() {
                         val ist = downloadRes.bodyAsChannel().toInputStream()
 
                         val progress = ProgressCounter(totalSize) { total, processed ->
-                            updateNotification(
-                                createProgressNotification(
-                                    localTaskId,
-                                    senderName,
-                                    total,
-                                    processed
-                                )
-                            )
+                            // 这个回调可以保留或移除，因为我们在 saveArchive 中处理
                         }
 
                         ZipInputStream(ist).use { zipStream ->
-                            saveArchive(zipStream, progress)
+                            saveArchive(zipStream, progress, localTaskId, senderName, fileName, totalSize)
                         }
                     }
 
@@ -605,10 +578,15 @@ class P2pReceiverService : BaseP2pService() {
 
     private fun saveArchive(
         zipStream: ZipInputStream,
-        progress: ProgressCounter
+        progress: ProgressCounter,
+        taskId: Int,
+        senderName: String,
+        fileName: String,
+        totalSize: Long
     ): List<ReceivedFile> {
         val receivedFiles = mutableListOf<ReceivedFile>()
         var processedSize = 0L
+        liveNotificationManager.resetSpeedCalculation()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             // Disable validation as we only use the file name anyway
@@ -647,6 +625,15 @@ class P2pReceiverService : BaseP2pService() {
 
                             processedSize += readLen.toLong()
                             progress.update(processedSize)
+                            
+                            // 使用实时通知更新
+                            val notification = createProgressNotification(
+                                taskId, senderName, entryFile.name, totalSize, processedSize
+                            )
+                            liveNotificationManager.updateNotificationThrottled(
+                                NotificationUtils.RECEIVER_FG_ID,
+                                notification
+                            )
                         }
                     }
 
