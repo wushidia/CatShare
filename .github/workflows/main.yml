@@ -1,52 +1,52 @@
-name: Build Release
+name: Build Release APK
 
 on:
   push:
-    tags:
-      - 'v*'
-
-permissions:
-  contents: write
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v3
-        with:
-          java-version: "17"
-          distribution: "temurin"
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Extract KeyStore
-        run: echo "${{ secrets.KEYSTORE }}" | base64 --decode > keystore.jks
-
-      - name: Extract Signing Properties
-        run: echo "${{ secrets.KEYSTORE_PROPERTIES }}" | base64 --decode > signing.properties
-
-      - name: Build Application
-        run: ./gradlew --no-daemon assembleRelease lintRelease
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: app/build/outputs/apk/release/app-release.apk
-
-      - name: Upload Lint Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: lint-results
-          path: app/build/reports/lint-results-release.xml
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: app/build/outputs/apk/release/app-release.apk
-          draft: true
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+        
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+      
+    - name: Build Release APK (No Obfuscation, No Signing)
+      run: ./gradlew assembleRelease
+      env:
+        GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m"
+        
+    - name: List build outputs
+      run: |
+        echo "Build outputs:"
+        find app/build/outputs/apk -name "*.apk"
+        
+    - name: Upload Release APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-apk
+        path: app/build/outputs/apk/release/*.apk
+        retention-days: 30
+        
+    - name: Get APK info
+      run: |
+        APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+        if [ -f "$APK_PATH" ]; then
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+          echo "APK Size: $APK_SIZE"
+          echo "APK Path: $APK_PATH"
+        fi
