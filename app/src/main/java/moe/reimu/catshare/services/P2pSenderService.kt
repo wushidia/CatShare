@@ -297,78 +297,69 @@ class P2pSenderService : BaseP2pService() {
                 }
 
                 get("/download") {
-                    Log.i(TAG, "Got download request from ${call.request.local.remoteAddress}")
-                    transferStartFuture.complete(Unit)
+    Log.i(TAG, "Got download request from ${call.request.local.remoteAddress}")
+    transferStartFuture.complete(Unit)
 
-                    if (call.request.queryParameters["taskId"] != taskIdStr) {
-                        call.respondText(
-                            "Task ID not found",
-                            ContentType.Text.Plain,
-                            HttpStatusCode.NotFound
-                        )
-                        return@get
-                    }
+    if (call.request.queryParameters["taskId"] != taskIdStr) {
+        call.respondText(
+            "Task ID not found",
+            ContentType.Text.Plain,
+            HttpStatusCode.NotFound
+        )
+        return@get
+    }
 
-                    var processedSize = 0L
-                    liveNotificationManager.resetSpeedCalculation()
+    var processedSize = 0L
+    var lastProgressUpdate = 0L
 
-                    call.respondOutputStream(ContentType.Application.Zip, HttpStatusCode.OK) {
-                        val cr = contentResolver
-                        ZipOutputStream(this).use { zo ->
-                            if (sharedTextContent != null) {
-                                zo.putNextEntry(ZipEntry("0/sharedText.txt"))
-                                zo.write(sharedTextContent.toByteArray(Charsets.UTF_8))
-                                zo.closeEntry()
-                                return@use
-                            }
+    call.respondOutputStream(ContentType.Application.Zip, HttpStatusCode.OK) {
+        val cr = contentResolver
+        ZipOutputStream(this).use { zo ->
+            if (sharedTextContent != null) {
+                zo.putNextEntry(ZipEntry("0/sharedText.txt"))
+                zo.write(sharedTextContent.toByteArray(Charsets.UTF_8))
+                zo.closeEntry()
+                return@use
+            }
 
-                            for ((i, rf) in task.files.withIndex()) {
-                                cr.openInputStream(rf.uri)!!.use { ist ->
-                                    zo.putNextEntry(ZipEntry("$i/${rf.name}"))
+            for ((i, rf) in task.files.withIndex()) {
+                cr.openInputStream(rf.uri)!!.use { ist ->
+                    zo.putNextEntry(ZipEntry("$i/${rf.name}"))
 
-                                    val buffer = ByteArray(1024 * 1024 * 4)
-                                    while (true) {
-                                        val readLen = ist.read(buffer)
-                                        if (readLen == -1) {
-                                            break
-                                        }
-                                        zo.write(buffer, 0, readLen)
-                                        processedSize += readLen.toLong()
-
-                                        // 使用实时通知管理器更新（带节流）
-                                        val notification = createProgressNotification(
-                                            task.id,
-                                            task.device.name,
-                                            rf.name,
-                                            totalSize,
-                                            processedSize
-                                        )
-                                        liveNotificationManager.updateNotificationThrottled(
-                                            NotificationUtils.SENDER_FG_ID,
-                                            notification
-                                        )
-                                    }
-
-                                    zo.closeEntry()
-                                }
-                            }
-                            
-                            // 传输完成，强制更新最终状态
-                            val finalNotification = createProgressNotification(
-                                task.id,
-                                task.device.name,
-                                task.files.last().name,
-                                totalSize,
-                                processedSize
-                            )
-                            liveNotificationManager.updateNotificationImmediate(
-                                NotificationUtils.SENDER_FG_ID,
-                                finalNotification
-                            )
+                    val buffer = ByteArray(1024 * 1024 * 4)
+                    while (true) {
+                        val readLen = ist.read(buffer)
+                        if (readLen == -1) {
+                            break
                         }
-                        transferCompleteFuture.complete(Unit)
+                        zo.write(buffer, 0, readLen)
+                        processedSize += readLen.toLong()
+
+                        // Update progress if needed
+                        val now = System.nanoTime()
+                        val elapsed = TimeUnit.SECONDS.convert(
+                            now - lastProgressUpdate, TimeUnit.NANOSECONDS
+                        )
+                        if (elapsed > 1) {
+                            updateNotification(
+                                createProgressNotification(
+                                    task.id,
+                                    task.device.name,
+                                    totalSize,
+                                    processedSize
+                                )
+                            )
+                            lastProgressUpdate = now
+                        }
                     }
+
+                    zo.closeEntry()
                 }
+            }
+        }
+        transferCompleteFuture.complete(Unit)
+    }
+}
             }
         }
 
